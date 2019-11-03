@@ -9,6 +9,28 @@ import time
 import cv2
 import os
 
+def initializeTracker(tracker_type,minor_ver):
+	if int(minor_ver) < 3:
+		tracker = cv2.Tracker_create(tracker_type)
+	else:
+		if tracker_type == 'BOOSTING':
+			tracker = cv2.TrackerBoosting_create()
+		if tracker_type == 'MIL':
+			tracker = cv2.TrackerMIL_create()
+		if tracker_type == 'KCF':
+			tracker = cv2.TrackerKCF_create()
+		if tracker_type == 'TLD':
+			tracker = cv2.TrackerTLD_create()
+		if tracker_type == 'MEDIANFLOW':
+			tracker = cv2.TrackerMedianFlow_create()
+		if tracker_type == 'GOTURN':
+			tracker = cv2.TrackerGOTURN_create()
+		if tracker_type == 'MOSSE':
+			tracker = cv2.TrackerMOSSE_create()
+		if tracker_type == "CSRT":
+			tracker = cv2.TrackerCSRT_create()
+	return tracker
+
 def is_valid_IOU(bbox1, bbox2, threshold):
 	minx = min(bbox1[0]+bbox1[2],bbox2[0]+bbox2[2])
 	miny = min(bbox1[1]+bbox1[3],bbox2[1]+bbox2[3])
@@ -74,30 +96,11 @@ except:
 
 tracker_types = ['BOOSTING', 'MIL','KCF', 'TLD', 'MEDIANFLOW', 'GOTURN', 'MOSSE', 'CSRT']
 tracker_type = tracker_types[7]
-
-if int(minor_ver) < 3:
-	tracker = cv2.Tracker_create(tracker_type)
-else:
-	if tracker_type == 'BOOSTING':
-		tracker = cv2.TrackerBoosting_create()
-	if tracker_type == 'MIL':
-		tracker = cv2.TrackerMIL_create()
-	if tracker_type == 'KCF':
-		tracker = cv2.TrackerKCF_create()
-	if tracker_type == 'TLD':
-		tracker = cv2.TrackerTLD_create()
-	if tracker_type == 'MEDIANFLOW':
-		tracker = cv2.TrackerMedianFlow_create()
-	if tracker_type == 'GOTURN':
-		tracker = cv2.TrackerGOTURN_create()
-	if tracker_type == 'MOSSE':
-		tracker = cv2.TrackerMOSSE_create()
-	if tracker_type == "CSRT":
-		tracker = cv2.TrackerCSRT_create()
+tracker = initializeTracker(tracker_type,minor_ver)
 
 
 frame_number = 0
-ok = None
+ok = False
 # loop over frames from the video file stream
 while True:
 	frame_number += 1
@@ -113,7 +116,7 @@ while True:
 	if W is None or H is None:
 		(H, W) = frame.shape[:2]
 
-	if frame_number%5 == 0 or ok is None:
+	if frame_number%5 == 0 or not ok:
 		# construct a blob from the input frame and then perform a forward
 		# pass of the YOLO object detector, giving us our bounding boxes
 		# and associated probabilities
@@ -195,15 +198,25 @@ while True:
 					yt = y - 0.3*h
 					wt = 1.6*w
 					ht = 1.6*h
-					if frame_number == 0:
+					if frame_number == 1:
 						tracker.init(frame, (xt,yt,wt,ht))
-						ok = None
+						ok = False
 					else:
 						ok, bbox = tracker.update(frame)
-						if not is_valid_IOU(boxes[i],bbox,0.5):
+						if not is_valid_IOU(boxes[i],bbox,0.4):
 							print("IOU Failed")
+							tracker = initializeTracker(tracker_type,minor_ver)
 							tracker.init(frame, (xt,yt,wt,ht))
-							ok = None
+							ok = False
+
+							p1 = (int(bbox[0]), int(bbox[1]))
+							p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+							cv2.rectangle(frame, p1, p2, (0,255,0), 2, 1)
+
+						else:
+							p1 = (int(bbox[0]), int(bbox[1]))
+							p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+							cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
 				else:
 					ok, bbox = tracker.update(frame)
 				if ok:
@@ -220,21 +233,16 @@ while True:
 					# Tracking failure
 					cv2.putText(frame, "Tracking failure detected", (100,80), cv2.FONT_HERSHEY_SIMPLEX, 0.75,(0,0,255),2)
 	else:
-		if ok:
-			ok, bbox = tracker.update(frame)
-			# Tracking success
-			p1 = (int(bbox[0]), int(bbox[1]))
-			p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-			sub_face = frame[p1[1]:p2[1], p1[0]:p2[0]]
-			# apply a gaussian blur on this new recangle image
-			sub_face = cv2.GaussianBlur(sub_face,(23, 23), 30)
-			# merge this blurry rectangle to our final image
-			frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
-			cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
-		else:
-			# Tracking failure
-			cv2.putText(frame, "Tracking failure detected", (100,80), cv2.FONT_HERSHEY_SIMPLEX, 0.75,(0,0,255),2)
-
+		ok, bbox = tracker.update(frame)
+		# Tracking success
+		p1 = (int(bbox[0]), int(bbox[1]))
+		p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+		sub_face = frame[p1[1]:p2[1], p1[0]:p2[0]]
+		# apply a gaussian blur on this new recangle image
+		sub_face = cv2.GaussianBlur(sub_face,(23, 23), 30)
+		# merge this blurry rectangle to our final image
+		frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
+		cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
 
 	print("Frame number:",frame_number)
 	# check if the video writer is None
