@@ -39,6 +39,20 @@ def is_valid_IOU(bbox1, bbox2, threshold):
 	intersection = (maxx-minx)*(maxy-miny)
 	return intersection/(bbox1[2]*bbox1[3] + bbox2[2]*bbox2[3] - intersection) > threshold
 
+def is_valid_multi_IOU(bboxs1, bboxs2, threshold):
+	for bbox1 in bboxs1:
+		max_iou = 0
+		for bbox2 in bboxs2:
+			minx = min(bbox1[0]+bbox1[2],bbox2[0]+bbox2[2])
+			miny = min(bbox1[1]+bbox1[3],bbox2[1]+bbox2[3])
+			maxx = max(bbox1[0],bbox2[0])
+			maxy = max(bbox1[1],bbox2[1])
+			intersection = (maxx-minx)*(maxy-miny)
+			max_iou = max(max_iou,intersection/(bbox1[2]*bbox1[3] + bbox2[2]*bbox2[3] - intersection))
+		if max_iou <= threshold:
+			return False
+	return True
+
 (major_ver, minor_ver, subminor_ver) = (cv2.__version__).split('.')
 # construct the argument parse and parse the arguments
 ap = argparse.ArgumentParser()
@@ -96,8 +110,9 @@ except:
 
 tracker_types = ['BOOSTING', 'MIL','KCF', 'TLD', 'MEDIANFLOW', 'GOTURN', 'MOSSE', 'CSRT']
 tracker_type = tracker_types[7]
-tracker = initializeTracker(tracker_type,minor_ver)
+# tracker = initializeTracker(tracker_type,minor_ver)
 
+multi_tracker = cv2.MultiTracker_create()
 
 frame_number = 0
 ok = False
@@ -170,6 +185,7 @@ while True:
 		idxs = cv2.dnn.NMSBoxes(boxes, confidences, args["confidence"],
 			args["threshold"])
 
+		face_boxes = []
 		# ensure at least one detection exists
 		if len(idxs) > 0:
 			# loop over the indexes we are keeping
@@ -186,7 +202,7 @@ while True:
 					# draw a bounding box rectangle and label on the frame
 					sub_face = frame[y:y+h, x:x+w]
 					# apply a gaussian blur on this new recangle image
-					sub_face = cv2.GaussianBlur(sub_face,(23, 23), 30)
+					sub_face = cv2.GaussianBlur(sub_face,(15, 15), 30)
 					# merge this blurry rectangle to our final image
 					frame[y:y+sub_face.shape[0], x:x+sub_face.shape[1]] = sub_face
 
@@ -194,55 +210,64 @@ while True:
 					cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
 					cv2.putText(frame, text, (x, y - 5),
 						cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-					xt = x - 0.3*w
-					yt = y - 0.3*h
+					xt = max(x - 0.3*w,0)
+					yt = max(y - 0.3*h,0)
 					wt = 1.6*w
 					ht = 1.6*h
 					if frame_number == 1:
-						tracker.init(frame, (xt,yt,wt,ht))
+						multi_tracker.add(initializeTracker(tracker_type,minor_ver),frame,(xt,yt,wt,ht))
+						# tracker.init(frame, (xt,yt,wt,ht))
 						ok = False
 					else:
-						ok, bbox = tracker.update(frame)
-						if not is_valid_IOU(boxes[i],bbox,0.4):
-							print("IOU Failed")
-							tracker = initializeTracker(tracker_type,minor_ver)
-							tracker.init(frame, (xt,yt,wt,ht))
-							ok = False
-
-							p1 = (int(bbox[0]), int(bbox[1]))
-							p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-							cv2.rectangle(frame, p1, p2, (0,255,0), 2, 1)
-
-						else:
-							p1 = (int(bbox[0]), int(bbox[1]))
-							p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-							cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
-				else:
-					ok, bbox = tracker.update(frame)
-				if ok:
-					# Tracking success
-					p1 = (int(bbox[0]), int(bbox[1]))
+						face_boxes.append((xt,yt,wt,ht))
+			ok, bboxs = multi_tracker.update(frame)
+			print(ok)
+			if not is_valid_multi_IOU(face_boxes,bboxs,0.4):
+				print("IOU Failed")
+				multi_tracker = cv2.MultiTracker_create()
+				for fb in face_boxes:
+					multi_tracker.add(initializeTracker(tracker_type,minor_ver),frame,(fb[0],fb[1],fb[2],fb[3]))
+					ok = False
+					p1 = (int(fb[0]), int(fb[1]))
+					p2 = (int(fb[0] + fb[2]), int(fb[1] + fb[3]))
+					cv2.rectangle(frame, p1, p2, (0,255,0), 2, 1)
+				for bbox in bboxs:
+					p1 = (int(max(0,bbox[0])), int(max(0,bbox[1])))
 					p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-					sub_face = frame[p1[1]:p2[1], p1[0]:p2[0]]
-					# apply a gaussian blur on this new recangle image
-					sub_face = cv2.GaussianBlur(sub_face,(23, 23), 30)
-					# merge this blurry rectangle to our final image
-					frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
+					cv2.rectangle(frame, p1, p2, (0,0,255), 2, 1)
+
+			else:
+				for bbox in bboxs:
+					p1 = (int(max(0,bbox[0])), int(max(0,bbox[1])))
+					p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
 					cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
-				else :
-					# Tracking failure
-					cv2.putText(frame, "Tracking failure detected", (100,80), cv2.FONT_HERSHEY_SIMPLEX, 0.75,(0,0,255),2)
+				# if ok:
+				# 	# Tracking success
+				# 	p1 = (int(bbox[0]), int(bbox[1]))
+				# 	p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+				# 	sub_face = frame[p1[1]:p2[1], p1[0]:p2[0]]
+				# 	# apply a gaussian blur on this new recangle image
+				# 	sub_face = cv2.GaussianBlur(sub_face,(15, 15), 30)
+				# 	# merge this blurry rectangle to our final image
+				# 	frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
+				# 	cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
+				# else :
+				# 	# Tracking failure
+				# 	cv2.putText(frame, "Tracking failure detected", (100,80), cv2.FONT_HERSHEY_SIMPLEX, 0.75,(0,0,255),2)
 	else:
-		ok, bbox = tracker.update(frame)
-		# Tracking success
-		p1 = (int(bbox[0]), int(bbox[1]))
-		p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-		sub_face = frame[p1[1]:p2[1], p1[0]:p2[0]]
-		# apply a gaussian blur on this new recangle image
-		sub_face = cv2.GaussianBlur(sub_face,(23, 23), 30)
-		# merge this blurry rectangle to our final image
-		frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
-		cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
+		ok, bboxs = multi_tracker.update(frame)
+		if ok:
+			# Tracking success
+			for bbox in bboxs:
+				p1 = (int(max(0,bbox[0])), int(max(0,bbox[1])))
+				p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+				# print(p1,p2,frame.shape)
+				sub_face = frame[p1[1]:p2[1], p1[0]:p2[0]]
+				# apply a gaussian blur on this new recangle image
+				sub_face = cv2.GaussianBlur(sub_face,(15, 15), 30)
+				# merge this blurry rectangle to our final image
+				frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
+				cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
 
 	print("Frame number:",frame_number)
 	# check if the video writer is None
