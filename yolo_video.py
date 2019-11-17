@@ -31,24 +31,28 @@ def initializeTracker(tracker_type,minor_ver):
 			tracker = cv2.TrackerCSRT_create()
 	return tracker
 
-def is_valid_IOU(bbox1, bbox2, threshold):
+def get_IOU(bbox1, bbox2):
 	minx = min(bbox1[0]+bbox1[2],bbox2[0]+bbox2[2])
 	miny = min(bbox1[1]+bbox1[3],bbox2[1]+bbox2[3])
 	maxx = max(bbox1[0],bbox2[0])
 	maxy = max(bbox1[1],bbox2[1])
 	intersection = (maxx-minx)*(maxy-miny)
-	return intersection/(bbox1[2]*bbox1[3] + bbox2[2]*bbox2[3] - intersection) > threshold
+	return intersection/(bbox1[2]*bbox1[3] + bbox2[2]*bbox2[3] - intersection)
+
+def get_IO1(bbox1, bbox2):
+	minx = min(bbox1[0]+bbox1[2],bbox2[0]+bbox2[2])
+	miny = min(bbox1[1]+bbox1[3],bbox2[1]+bbox2[3])
+	maxx = max(bbox1[0],bbox2[0])
+	maxy = max(bbox1[1],bbox2[1])
+	intersection = (maxx-minx)*(maxy-miny)
+	return intersection/(bbox1[2]*bbox1[3])
 
 def is_valid_multi_IOU(bboxs1, bboxs2, threshold):
 	for bbox1 in bboxs1:
 		max_iou = 0
 		for bbox2 in bboxs2:
-			minx = min(bbox1[0]+bbox1[2],bbox2[0]+bbox2[2])
-			miny = min(bbox1[1]+bbox1[3],bbox2[1]+bbox2[3])
-			maxx = max(bbox1[0],bbox2[0])
-			maxy = max(bbox1[1],bbox2[1])
-			intersection = (maxx-minx)*(maxy-miny)
-			max_iou = max(max_iou,intersection/(bbox1[2]*bbox1[3] + bbox2[2]*bbox2[3] - intersection))
+			# max_iou = max(max_iou,get_IOU(bbox1,bbox2))
+			max_iou = max(max_iou,get_IO1(bbox1,bbox2))
 		if max_iou <= threshold:
 			return False
 	return True
@@ -222,7 +226,7 @@ while True:
 						face_boxes.append((xt,yt,wt,ht))
 			ok, bboxs = multi_tracker.update(frame)
 			print(ok)
-			if not is_valid_multi_IOU(face_boxes,bboxs,0.4):
+			if not is_valid_multi_IOU(face_boxes,bboxs,0.95):
 				print("IOU Failed")
 				multi_tracker = cv2.MultiTracker_create()
 				for fb in face_boxes:
