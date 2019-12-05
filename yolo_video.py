@@ -32,6 +32,10 @@ def initializeTracker(tracker_type,minor_ver):
 	return tracker
 
 def get_IOU(bbox1, bbox2):
+	if bbox1[0] > bbox2[0]+bbox2[2] or bbox2[0] > bbox1[0]+bbox1[2]:
+		return 0
+	if bbox1[1] > bbox2[1]+bbox2[3] or bbox2[1] > bbox1[1]+bbox1[3]:
+		return 0
 	minx = min(bbox1[0]+bbox1[2],bbox2[0]+bbox2[2])
 	miny = min(bbox1[1]+bbox1[3],bbox2[1]+bbox2[3])
 	maxx = max(bbox1[0],bbox2[0])
@@ -40,6 +44,10 @@ def get_IOU(bbox1, bbox2):
 	return intersection/(bbox1[2]*bbox1[3] + bbox2[2]*bbox2[3] - intersection)
 
 def get_IO1(bbox1, bbox2):
+	if bbox1[0] > bbox2[0]+bbox2[2] or bbox2[0] > bbox1[0]+bbox1[2]:
+		return 0
+	if bbox1[1] > bbox2[1]+bbox2[3] or bbox2[1] > bbox1[1]+bbox1[3]:
+		return 0
 	minx = min(bbox1[0]+bbox1[2],bbox2[0]+bbox2[2])
 	miny = min(bbox1[1]+bbox1[3],bbox2[1]+bbox2[3])
 	maxx = max(bbox1[0],bbox2[0])
@@ -120,6 +128,9 @@ multi_tracker = cv2.MultiTracker_create()
 
 frame_number = 0
 ok = False
+initialized = False
+frames = []
+iou_mismatch_idx = []
 # loop over frames from the video file stream
 while True:
 	frame_number += 1
@@ -135,7 +146,7 @@ while True:
 	if W is None or H is None:
 		(H, W) = frame.shape[:2]
 
-	if frame_number%5 == 0 or not ok:
+	if frame_number%5 == 0 or not ok or not initialized:
 		# construct a blob from the input frame and then perform a forward
 		# pass of the YOLO object detector, giving us our bounding boxes
 		# and associated probabilities
@@ -218,20 +229,24 @@ while True:
 					yt = max(y - 0.3*h,0)
 					wt = 1.6*w
 					ht = 1.6*h
-					if frame_number == 1:
+					if not initialized:
 						multi_tracker.add(initializeTracker(tracker_type,minor_ver),frame,(xt,yt,wt,ht))
 						# tracker.init(frame, (xt,yt,wt,ht))
-						ok = False
 					else:
-						face_boxes.append((xt,yt,wt,ht))
+						face_boxes.append(boxes[i])
+		if initialized:
 			ok, bboxs = multi_tracker.update(frame)
-			print(ok)
 			if not is_valid_multi_IOU(face_boxes,bboxs,0.95):
 				print("IOU Failed")
+				iou_mismatch_idx.append(frame_number-1)
 				multi_tracker = cv2.MultiTracker_create()
 				for fb in face_boxes:
+					fb[0] = max(fb[0] - 0.3*fb[2],0)
+					fb[1] = max(fb[1] - 0.3*fb[3],0)
+					fb[2] = 1.6*fb[2]
+					fb[3] = 1.6*fb[3]
 					multi_tracker.add(initializeTracker(tracker_type,minor_ver),frame,(fb[0],fb[1],fb[2],fb[3]))
-					ok = False
+					# ok = False
 					p1 = (int(fb[0]), int(fb[1]))
 					p2 = (int(fb[0] + fb[2]), int(fb[1] + fb[3]))
 					cv2.rectangle(frame, p1, p2, (0,255,0), 2, 1)
@@ -239,12 +254,12 @@ while True:
 					p1 = (int(max(0,bbox[0])), int(max(0,bbox[1])))
 					p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
 					cv2.rectangle(frame, p1, p2, (0,0,255), 2, 1)
-
 			else:
 				for bbox in bboxs:
 					p1 = (int(max(0,bbox[0])), int(max(0,bbox[1])))
 					p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
 					cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
+		initialized = True
 				# if ok:
 				# 	# Tracking success
 				# 	p1 = (int(bbox[0]), int(bbox[1]))
@@ -272,8 +287,94 @@ while True:
 				# merge this blurry rectangle to our final image
 				frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
 				cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
-
+	frames.append(frame)
 	print("Frame number:",frame_number)
+
+print("Processing IOU mismatch cases")
+e_index = 0
+for imi in iou_mismatch_idx:
+	s_index = max(0,imi-4,e_index)
+	e_index = max(imi,s_index+1)
+	for ind in range(s_index,e_index):
+		print("Frame number:",ind)
+		frame = frames[ind]
+		blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (416, 416),
+		swapRB=True, crop=False)
+		net.setInput(blob)
+		start = time.time()
+		layerOutputs = net.forward(ln)
+		end = time.time()
+
+		# initialize our lists of detected bounding boxes, confidences,
+		# and class IDs, respectively
+		boxes = []
+		confidences = []
+		classIDs = []
+
+		# loop over each of the layer outputs
+		for output in layerOutputs:
+			# loop over each of the detections
+			for detection in output:
+				# extract the class ID and confidence (i.e., probability)
+				# of the current object detection
+				scores = detection[5:]
+				classID = np.argmax(scores)
+				confidence = scores[classID]
+
+				# filter out weak predictions by ensuring the detected
+				# probability is greater than the minimum probability
+				if confidence > args["confidence"]:
+					# scale the bounding box coordinates back relative to
+					# the size of the image, keeping in mind that YOLO
+					# actually returns the center (x, y)-coordinates of
+					# the bounding box followed by the boxes' width and
+					# height
+					box = detection[0:4] * np.array([W, H, W, H])
+					(centerX, centerY, width, height) = box.astype("int")
+
+					# use the center (x, y)-coordinates to derive the top
+					# and and left corner of the bounding box
+					x = int(centerX - (width / 2))
+					y = int(centerY - (height / 2))
+
+					# update our list of bounding box coordinates,
+					# confidences, and class IDs
+					boxes.append([x, y, int(width), int(height)])
+					confidences.append(float(confidence))
+					classIDs.append(classID)
+
+		# apply non-maxima suppression to suppress weak, overlapping
+		# bounding boxes
+		idxs = cv2.dnn.NMSBoxes(boxes, confidences, args["confidence"],
+			args["threshold"])
+
+		# ensure at least one detection exists
+		if len(idxs) > 0:
+			# loop over the indexes we are keeping
+			for i in idxs.flatten():
+				# extract the bounding box coordinates
+				(x, y) = (boxes[i][0], boxes[i][1])
+				(w, h) = (boxes[i][2], boxes[i][3])
+
+				x = max(0,x)
+				y = max(0,y)
+				text = "{}: {:.4f}".format(LABELS[classIDs[i]],
+					confidences[i])
+				if 'face' in text.lower():
+					# draw a bounding box rectangle and label on the frame
+					sub_face = frame[y:y+h, x:x+w]
+					# apply a gaussian blur on this new recangle image
+					sub_face = cv2.GaussianBlur(sub_face,(15, 15), 30)
+					# merge this blurry rectangle to our final image
+					frame[y:y+sub_face.shape[0], x:x+sub_face.shape[1]] = sub_face
+
+					color = [int(c) for c in COLORS[classIDs[i]]]
+					cv2.rectangle(frame, (x, y), (x + w, y + h), (255,255,255), 2)
+					cv2.putText(frame, text, (x, y - 5),
+						cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+		frames[ind] = frame
+
+for frame in frames:
 	# check if the video writer is None
 	if writer is None:
 		# initialize our video writer
@@ -287,7 +388,6 @@ while True:
 			print("[INFO] single frame took {:.4f} seconds".format(elap))
 			print("[INFO] estimated total time to finish: {:.4f}".format(
 				elap * total))
-
 	# write the output frame to disk
 	writer.write(frame)
 
