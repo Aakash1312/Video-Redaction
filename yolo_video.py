@@ -8,6 +8,7 @@ import imutils
 import time
 import cv2
 import os
+import logging
 
 def initializeTracker(tracker_type,minor_ver):
 	if int(minor_ver) < 3:
@@ -93,9 +94,16 @@ COLORS = np.random.randint(0, 255, size=(len(LABELS), 3),
 weightsPath = os.path.sep.join([args["yolo"], "yolov3.weights"])
 configPath = os.path.sep.join([args["yolo"], "yolov3.cfg"])
 
+#Create and configure logger 
+logging.basicConfig(filename="redaction.log", 
+                    format='%(asctime)s %(message)s', 
+                    filemode='w')
+logger = logging.getLogger()
+
+logger.setLevel(logging.DEBUG)  
 # load our YOLO object detector trained on COCO dataset (80 classes)
 # and determine only the *output* layer names that we need from YOLO
-print("[INFO] loading YOLO from disk...")
+logger.info("[INFO] loading YOLO from disk...")
 net = cv2.dnn.readNetFromDarknet(configPath, weightsPath)
 ln = net.getLayerNames()
 ln = [ln[i[0] - 1] for i in net.getUnconnectedOutLayers()]
@@ -111,13 +119,13 @@ try:
 	prop = cv2.cv.CV_CAP_PROP_FRAME_COUNT if imutils.is_cv2() \
 		else cv2.CAP_PROP_FRAME_COUNT
 	total = int(vs.get(prop))
-	print("[INFO] {} total frames in video".format(total))
+	logger.info("[INFO] {} total frames in video".format(total))
 
 # an error occurred while trying to determine the total
 # number of frames in the video file
 except:
-	print("[INFO] could not determine # of frames in video")
-	print("[INFO] no approx. completion time can be provided")
+	logger.info("[INFO] could not determine # of frames in video")
+	logger.info("[INFO] no approx. completion time can be provided")
 	total = -1
 
 tracker_types = ['BOOSTING', 'MIL','KCF', 'TLD', 'MEDIANFLOW', 'GOTURN', 'MOSSE', 'CSRT']
@@ -237,7 +245,7 @@ while True:
 		if initialized:
 			ok, bboxs = multi_tracker.update(frame)
 			if not is_valid_multi_IOU(face_boxes,bboxs,0.95):
-				print("IOU Failed")
+				logger.info("IOU Failed: untracked faces found")
 				iou_mismatch_idx.append(frame_number-1)
 				multi_tracker = cv2.MultiTracker_create()
 				for fb in face_boxes:
@@ -280,7 +288,7 @@ while True:
 			for bbox in bboxs:
 				p1 = (int(max(0,bbox[0])), int(max(0,bbox[1])))
 				p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-				# print(p1,p2,frame.shape)
+				# logger.info(p1,p2,frame.shape)
 				sub_face = frame[p1[1]:p2[1], p1[0]:p2[0]]
 				# apply a gaussian blur on this new recangle image
 				sub_face = cv2.GaussianBlur(sub_face,(15, 15), 30)
@@ -288,15 +296,15 @@ while True:
 				frame[p1[1]:p1[1]+sub_face.shape[0], p1[0]:p1[0]+sub_face.shape[1]] = sub_face
 				cv2.rectangle(frame, p1, p2, (255,0,0), 2, 1)
 	frames.append(frame)
-	print("Frame number:",frame_number)
+	logger.info("Processing frame number:%d",frame_number)
 
-print("Processing IOU mismatch cases")
+logger.info("Processing IOU mismatch cases")
 e_index = 0
 for imi in iou_mismatch_idx:
 	s_index = max(0,imi-4,e_index)
 	e_index = max(imi,s_index+1)
 	for ind in range(s_index,e_index):
-		print("Frame number:",ind)
+		logger.info("Processing frame number:%d",ind)
 		frame = frames[ind]
 		blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (416, 416),
 		swapRB=True, crop=False)
@@ -385,13 +393,13 @@ for frame in frames:
 		# some information on processing single frame
 		if total > 0:
 			elap = (end - start)
-			print("[INFO] single frame took {:.4f} seconds".format(elap))
-			print("[INFO] estimated total time to finish: {:.4f}".format(
-				elap * total))
+			# logger.info("[INFO] single frame took {:.4f} seconds".format(elap))
+			# logger.info("[INFO] estimated total time to finish: {:.4f}".format(
+				# elap * total))
 	# write the output frame to disk
 	writer.write(frame)
 
 # release the file pointers
-print("[INFO] cleaning up...")
+logger.info("[INFO] cleaning up...")
 writer.release()
 vs.release()
